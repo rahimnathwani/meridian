@@ -4,6 +4,16 @@ import { err, ok } from 'neverthrow';
 import { safeFetch } from './utils';
 import { Env } from '../index';
 
+import { exec } from 'child_process';
+import { promisify } from 'util';
+const execPromise = promisify(exec);
+
+async function extractWithTrafilatura(html: string): Promise<string> {
+  const command = `python3 -c "import sys, trafilatura; html=sys.stdin.read(); extracted = trafilatura.extract(html, output_format='plain'); print(extracted if extracted is not None else '')"`;
+  const { stdout } = await execPromise(`echo ${JSON.stringify(html)} | ${command}`);
+  return stdout.trim();
+}
+
 export const articleSchema = z.object({
   status: z.coerce.boolean(),
   errors: z.array(z.object({ code: z.number(), message: z.string() })).optional(),
@@ -145,13 +155,19 @@ export async function getArticleWithFetch(url: string) {
   } else if (typeof response.value !== 'string') {
     return err({ type: 'FETCH_ERROR', error: new Error('Response is not a string') });
   }
-
-  const articleResult = parseArticle({ html: response.value });
-  if (articleResult.isErr()) {
-    return err({ type: 'PARSE_ERROR', error: articleResult.error });
+  try {
+    const extracted = await extractWithTrafilatura(response.value);
+    if (!extracted) {
+      return err({ type: 'PARSE_ERROR', error: new Error('No text extracted') });
+    }
+    const articleResult = parseArticle({ html: extracted });
+    if (articleResult.isErr()) {
+      return err({ type: 'PARSE_ERROR', error: articleResult.error });
+    }
+    return ok(articleResult.value);
+  } catch (error) {
+    return err({ type: 'FETCH_ERROR', error });
   }
-
-  return ok(articleResult.value);
 }
 
 export async function getRssFeedWithFetch(url: string) {
